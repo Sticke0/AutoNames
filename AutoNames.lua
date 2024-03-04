@@ -11,7 +11,12 @@ local function AutoNames()
 	local SETTINGS_FILENAME = "AutoNames.json"
 	local CUSTOM_SPRITE_FOLDER = FileManager.getCustomFolderPath() .. "AutoNamesSprites\\"
 
-	-- local NEWLINE = "\r\n"
+	self.skipHelpBoxEvent = ""
+	self.setInfoEvent = ""
+
+	self.setInfoEventName = "Set Player & Rival info"
+	self.skipHelpBoxEventName = "Hide intro help box"
+
 	self.DefaultOptions = {
 		player = {
 			name = "Ash",
@@ -193,6 +198,9 @@ local function AutoNames()
 		["ä"] = 0xF4,
 		["ö"] = 0xF5,
 		["ü"] = 0xF6,
+		["\n"] = 0xFE,
+		["\b"] = 0xFB,
+		["\r"] = 0xFA,
 	}
 
 	--------------------------------------
@@ -205,13 +213,14 @@ local function AutoNames()
 		local saveBlock2 = memory.read_u32_le(0x0300500C) -- Save Block 2 (DMA Protected)
 
 		local bytes = self.getBytesFromText(player.name, 7)
+    print(player.name)
 		local name_tophalf = bytes[1] + bytes[2] * 0x100 + bytes[3] * 0x10000 + bytes[4] * 0x1000000
 		local name_bottomhalf = bytes[5] + bytes[6] * 0x100 + bytes[7] * 0x10000 + bytes[8] * 0x1000000
 
 		memory.write_u32_le(saveBlock2, name_tophalf)
 		memory.write_u32_le(saveBlock2 + 4, name_bottomhalf)
 
-		local sprite = self.SpriteData.FRLG[player.sprite]-1 or 0 -- Default to Male
+		local sprite = self.SpriteData.FRLG[player.sprite] - 1 or 0 -- Default to Male
 		memory.write_u8(saveBlock2 + 8, sprite)
 	end
 
@@ -230,24 +239,26 @@ local function AutoNames()
 		return characterTable[character] or 0xAC
 	end
 
-	function self.getBytesFromText(text, size)
+	function self.getBytesFromText(text, maxSize)
 		local byteArray = {}
 		for i = 1, #text do
 			local char = text:sub(i, i)
 			byteArray[i] = self.getByteFromCharacter(char)
 		end
 
-		if #byteArray > size then
+		if #byteArray > maxSize and maxSize > 0 then
 			local trimmedArray = {}
-			for i = 1, size do
+			for i = 1, maxSize do
 				trimmedArray[i] = byteArray[i]
 			end
 			byteArray = trimmedArray
 		end
 
-		for i = #byteArray + 1, size + 1 do
+		for i = #byteArray + 1, maxSize do
 			byteArray[i] = 0xFF
 		end
+
+		byteArray[#byteArray + 1] = 0xFF
 
 		return byteArray
 	end
@@ -276,7 +287,7 @@ local function AutoNames()
 	end
 
 	function self.getTextInput(title, fieldName, default, callback)
-		local x, y, w, h, lineHeight = 20, 15, 300, 100, 20
+		local x, y, w, h, lineHeight = 20, 15, 300, 150, 20
 		local form = Utils.createBizhawkForm(title, w, h, 80, 20)
 
 		forms.label(form, fieldName, x, y, w - 40, lineHeight)
@@ -321,10 +332,10 @@ local function AutoNames()
 					self.DefaultOptions.player.name,
 					function(input)
 						self.DefaultOptions.player.name = input
-            Program.redraw(true)
+						Program.redraw(true)
 						self.saveOptionsToFile(self.DefaultOptions)
-        end
-      )
+					end
+				)
 			end,
 		},
 		RivalName = {
@@ -343,16 +354,16 @@ local function AutoNames()
 					self.DefaultOptions.rival.name,
 					function(input)
 						self.DefaultOptions.rival.name = input
-            Program.redraw(true)
+						Program.redraw(true)
 						self.saveOptionsToFile(self.DefaultOptions)
-        end
-      )
+					end
+				)
 			end,
 		},
 		PlayerSpriteIcon = {
 			type = Constants.ButtonTypes.IMAGE,
 			image = CUSTOM_SPRITE_FOLDER .. self.DefaultOptions.player.sprite .. ".png",
-  		box = { Constants.SCREEN.WIDTH + Constants.SCREEN.MARGIN + 52, Constants.SCREEN.MARGIN + 50, 65, 11 },
+			box = { Constants.SCREEN.WIDTH + Constants.SCREEN.MARGIN + 52, Constants.SCREEN.MARGIN + 50, 65, 11 },
 			isVisible = function(this)
 				return true
 			end,
@@ -497,71 +508,85 @@ local function AutoNames()
 			self.DefaultOptions = options
 		end
 
-    NameEditScreen.Buttons.PlayerSpriteIcon.image = CUSTOM_SPRITE_FOLDER .. self.DefaultOptions.player.sprite .. ".png"
+		NameEditScreen.Buttons.PlayerSpriteIcon.image = CUSTOM_SPRITE_FOLDER
+			.. self.DefaultOptions.player.sprite
+			.. ".png"
+
+    -- Because BizHawk is broken & stupid, this will only work ONCE per MANUAL CORE REBOOT (ctrl+r)
+    -- Even not unregistering the events make them keep working...
+    -- Only prevents going further on BizHawk v2.9.1, v2.8 still works
+    if WHY_IS_BIZHAWK_THIS_WAY ~= nil then
+      print('Not hard reloaded, event.on_bus_exec broken...')
+      return
+    end
+    WHY_IS_BIZHAWK_THIS_WAY = "BUT WHY THO???"
+
+    -- Clean text because why not
+    -- Like the only thing that can be done to speed up intro reliably because BizHawk 2.9.1 is broken
+    for i = 0x081c589d, 0x081c5f68, 4 do
+      Memory.writedword(i, 0xFFFFFF)
+    end
+
+		-- Sets Task_OakSpeech1 next task to Task_OakSpeech42
+		memory.write_u32_le(0x0812EF04, 0x08130C99)
+
+		self.setupSkipHelpboxEvent()
+		self.setupPlayerInfoEvent()
 	end
 
 	-- Executed only once: When the extension is disabled by the user, necessary to undo any customizations, if able
 	function self.unload()
 		-- [ADD CODE HERE]
+
+		-- if not Utils.isNilOrEmpty(self.setInfoEvent) then
+		-- print("Unregistering Info Event")
+		-- event.unregisterbyname(self.setInfoEventName)
+		-- end
+
+		-- if not Utils.isNilOrEmpty(self.skipHelpBoxEvent) then
+		-- print("Unregistering Helpbox")
+		-- event.unregisterbyname(self.skipHelpBoxEventName)
+		-- end
 	end
 
-	-- Executed once every 30 frames, after most data from game memory is read in
-	function self.afterProgramDataUpdate()
-		-- [ADD CODE HERE]
+	function self.setPlayerRivalInfo()
+    -- print('Supposed to set player info')
+		-- To prevent freezing since these values won't be set otherwise
+		-- Only run once on new game
 		self.applyPlayerInfo(self.DefaultOptions.player)
 		self.applyRivalInfo(self.DefaultOptions.rival)
 	end
 
-	-- Executed once every 30 frames, after any battle related data from game memory is read in
-	function self.afterBattleDataUpdate()
-		-- [ADD CODE HERE]
+	local function handleHelpBox()
+    -- print('Supposed to "break" help box')
+
+		if Memory.readbyte(0x030030f0 + 0x438) == 0 then
+			Memory.writebyte(0x030030f0 + 0x438, 1)
+		end
+
+		if Memory.readbyte(0x030030f0 + 0x438) == 2 then
+			Memory.writebyte(0x030030f0 + 0x438, 10)
+		end
 	end
 
-	-- Executed once every 30 frames or after any redraw event is scheduled (i.e. most button presses)
-	function self.afterRedraw()
-		-- [ADD CODE HERE]
+	function self.setupPlayerInfoEvent()
+		if not Utils.isNilOrEmpty(self.setInfoEvent) then
+			return
+		end
+
+		self.setInfoEvent = event.onmemoryexecute(self.setPlayerRivalInfo, 0x08130C98, self.setInfoEventName)
 	end
 
-	-- Executed before a button's onClick() is processed, and only once per click per button
-	-- Param: button: the button object being clicked
-	function self.onButtonClicked(button)
-		-- [ADD CODE HERE]
-	end
+	function self.setupSkipHelpboxEvent()
+		if not Utils.isNilOrEmpty(self.skipHelpBoxEvent) then
+			return
+		end
 
-	-- Executed after a new battle begins (wild or trainer), and only once per battle
-	function self.afterBattleBegins()
-		-- [ADD CODE HERE]
-	end
-
-	-- Executed after a battle ends, and only once per battle
-	function self.afterBattleEnds()
-		-- [ADD CODE HERE]
-	end
-
-	-- [Bizhawk only] Executed each frame (60 frames per second)
-	-- CAUTION: Avoid unnecessary calculations here, as this can easily affect performance.
-	function self.inputCheckBizhawk()
-		-- Uncomment to use, otherwise leave commented out
-		-- local mouseInput = input.getmouse() -- lowercase 'input' pulls directly from Bizhawk API
-		-- local joypadButtons = Input.getJoypadInputFormatted() -- uppercase 'Input' uses Tracker formatted input
-		-- [ADD CODE HERE]
-	end
-
-	-- [MGBA only] Executed each frame (60 frames per second)
-	-- CAUTION: Avoid unnecessary calculations here, as this can easily affect performance.
-	function self.inputCheckMGBA()
-		-- Uncomment to use, otherwise leave commented out
-		-- local joypadButtons = Input.getJoypadInputFormatted()
-		-- [ADD CODE HERE]
-	end
-
-	-- Executed each frame of the game loop, after most data from game memory is read in but before any natural redraw events occur
-	-- CAUTION: Avoid code here if possible, as this can easily affect performance. Most Tracker updates occur at 30-frame intervals, some at 10-frame.
-	function self.afterEachFrame()
-		-- [ADD CODE HERE]
+		self.skipHelpBoxEvent = event.onmemoryexecute(handleHelpBox, 0x0812EBD0, self.skipHelpBoxEventName)
 	end
 
 	return self
 end
+
 
 return AutoNames
