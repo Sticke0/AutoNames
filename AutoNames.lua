@@ -213,7 +213,6 @@ local function AutoNames()
 		local saveBlock2 = memory.read_u32_le(0x0300500C) -- Save Block 2 (DMA Protected)
 
 		local bytes = self.getBytesFromText(player.name, 7)
-    print(player.name)
 		local name_tophalf = bytes[1] + bytes[2] * 0x100 + bytes[3] * 0x10000 + bytes[4] * 0x1000000
 		local name_bottomhalf = bytes[5] + bytes[6] * 0x100 + bytes[7] * 0x10000 + bytes[8] * 0x1000000
 
